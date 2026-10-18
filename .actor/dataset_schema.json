@@ -1,0 +1,33 @@
+{
+    "$schema": "https://apify.com/schemas/v1/dataset.ide.json",
+    "actorSpecification": 1,
+    "fields": {},
+    "views": {
+        "overview": {
+            "title": "Leads",
+            "transformation": {
+                "fields": [
+                    "businessName",
+                    "website",
+                    "email",
+                    "phone",
+                    "address",
+                    "sourceUrl",
+                    "emailSource"
+                ]
+            },
+            "display": {
+                "component": "table",
+                "properties": {
+                    "businessName": { "label": "Business", "format": "text" },
+                    "website": { "label": "Website", "format": "link" },
+                    "email": { "label": "Email", "format": "text" },
+                    "phone": { "label": "Phone", "format": "text" },
+                    "address": { "label": "Address", "format": "text" },
+                    "sourceUrl": { "label": "OSM", "format": "link" },
+                    "emailSource": { "label": "Email source", "format": "text" }
+                }
+            }
+        }
+    }
+}

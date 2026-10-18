@@ -1,0 +1,13 @@
+{
+    "$schema": "https://apify.com/schemas/v1/output.ide.json",
+    "actorOutputSchemaVersion": 1,
+    "title": "Local business leads output",
+    "properties": {
+        "leads": {
+            "type": "string",
+            "title": "Leads (dataset)",
+            "description": "businessName, website, email, phone, address, sourceUrl, emailSource",
+            "template": "{{links.apiDefaultDatasetUrl}}/items"
+        }
+    }
+}

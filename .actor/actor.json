@@ -1,0 +1,25 @@
+{
+    "$schema": "https://apify.com/schemas/v1/actor.ide.json",
+    "actorSpecification": 1,
+    "name": "local-biz-leads-email",
+    "title": "Local Business Leads (with Email when found)",
+    "description": "Keyword + city → local business leads from OpenStreetMap. Optional website crawl for mailto/heuristic emails. Pay per successful lead.",
+    "version": "0.1",
+    "buildTag": "latest",
+    "meta": {
+        "templateId": "python-empty"
+    },
+    "dockerfile": "../Dockerfile",
+    "readme": "../README.md",
+    "input": "./input_schema.json",
+    "output": "./output_schema.json",
+    "storages": {
+        "dataset": "./dataset_schema.json"
+    },
+    "minMemoryMbytes": 512,
+    "defaultRunOptions": {
+        "build": "latest",
+        "memoryMbytes": 1024,
+        "timeoutSecs": 600
+    }
+}

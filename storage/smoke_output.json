@@ -1,0 +1,47 @@
+[
+  {
+    "businessName": "Dentist in Austin",
+    "website": "https://dentistinaustintx.com",
+    "email": "",
+    "phone": "",
+    "address": "2110 West Slaughter Lane, Austin, Texas, 78748",
+    "sourceUrl": "https://www.openstreetmap.org/way/955434311",
+    "emailSource": ""
+  },
+  {
+    "businessName": "Austin Dental",
+    "website": "https://www.lifetimedental.com",
+    "email": "",
+    "phone": "+1-512-982-4006",
+    "address": "2206 West Parmer Lane, Austin, Texas, 78727",
+    "sourceUrl": "https://www.openstreetmap.org/way/383188243",
+    "emailSource": ""
+  },
+  {
+    "businessName": "Austin Emergency Dental",
+    "website": "https://emergencydentalaustin.com",
+    "email": "admin@emergencydentalaustin.com",
+    "phone": "+1-737-747-4646",
+    "address": "2500 West William Cannon Drive, Austin, Texas, 78745",
+    "sourceUrl": "https://www.openstreetmap.org/node/14273202251",
+    "emailSource": "osm_tag"
+  },
+  {
+    "businessName": "Smiles of Austin",
+    "website": "https://smilesofaustin.net",
+    "email": "",
+    "phone": "+1-512-451-8310",
+    "address": "1910 West 35th Street, Austin, Texas, 78703",
+    "sourceUrl": "https://www.openstreetmap.org/node/7822180147",
+    "emailSource": ""
+  },
+  {
+    "businessName": "Austin Cosmetic Dentistry",
+    "website": "https://austincosmetic.com",
+    "email": "downtown@austincosmetic.com",
+    "phone": "+1-512-476-2336",
+    "address": "221 West 6th Street, Austin, Texas, 78701",
+    "sourceUrl": "https://www.openstreetmap.org/node/13580396395",
+    "emailSource": "osm_tag"
+  }
+]
