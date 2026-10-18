@@ -454,6 +454,7 @@ def collect_leads(
     location: str,
     max_items: int = 50,
     enrich_email: bool = True,
+    only_with_email: bool = False,
     log: LogFn = _noop_log,
 ) -> list[dict[str, str]]:
     query = (query or "").strip()
@@ -461,21 +462,26 @@ def collect_leads(
     if not query or not location:
         raise ValueError("query and location are required")
     max_items = max(1, min(int(max_items or 50), 500))
+    only_with_email = bool(only_with_email)
+    # Over-fetch when filtering to email-only so maxItems still means up to N email leads
+    fetch_limit = max_items
+    if only_with_email:
+        fetch_limit = min(max(max_items * 3, max_items + 10), 500)
 
     with httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
         rows = nominatim_search_leads(
-            client, query, location, limit=max(max_items, 10), log=log
+            client, query, location, limit=max(fetch_limit, 10), log=log
         )
         time.sleep(1.1)  # Nominatim 1 req/s policy
 
-        need_more = sum(1 for r in rows if r.get("website")) < min(max_items, 3)
+        need_more = sum(1 for r in rows if r.get("website")) < min(fetch_limit, 3)
         if need_more:
             # Optional Overpass fill — never fail the run if it errors
             try:
                 lat, lon = geocode_location(client, location, log=log)
                 time.sleep(1.1)
                 ql = build_overpass_query(
-                    query, lat, lon, radius_m=10000, limit=max(max_items * 2, 20)
+                    query, lat, lon, radius_m=10000, limit=max(fetch_limit * 2, 20)
                 )
                 elements = run_overpass(client, ql, log=log)
                 over_rows = []
@@ -491,12 +497,16 @@ def collect_leads(
 
         with_web = [r for r in rows if r.get("website")]
         without = [r for r in rows if not r.get("website")]
-        ordered = (with_web + without)[:max_items]
+        # Keep a larger pool before email filter when only_with_email
+        ordered = (with_web + without)[:fetch_limit]
 
         if enrich_email:
             for row in ordered:
                 if row.get("email") or not row.get("website"):
                     continue
+                # Early stop once we have enough email leads
+                if only_with_email and sum(1 for r in ordered if r.get("email")) >= max_items:
+                    break
                 email, src = enrich_email_from_website(client, row["website"], log=log)
                 if email:
                     row["email"] = email
@@ -509,6 +519,16 @@ def collect_leads(
             row["website"] = row.get("website") or ""
             row["phone"] = row.get("phone") or ""
             row["address"] = row.get("address") or ""
+
+        if only_with_email:
+            before = len(ordered)
+            ordered = [r for r in ordered if (r.get("email") or "").strip()][:max_items]
+            log(
+                f"onlyWithEmail filter: {before} → {len(ordered)} rows with email "
+                f"(maxItems={max_items})"
+            )
+        else:
+            ordered = ordered[:max_items]
 
         log(
             f"Collected {len(ordered)} leads "

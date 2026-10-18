@@ -14,6 +14,7 @@ async def main() -> None:
         location = actor_input.get("location")
         max_items = actor_input.get("maxItems", 50)
         enrich_email = actor_input.get("enrichEmail", True)
+        only_with_email = actor_input.get("onlyWithEmail", False)
 
         if not isinstance(query, str) or not query.strip():
             raise ValueError("Input field query is required (e.g. plumber, dentist).")
@@ -26,10 +27,14 @@ async def main() -> None:
         except (TypeError, ValueError):
             max_items = 50
         enrich_email = bool(enrich_email) if enrich_email is not None else True
+        only_with_email = (
+            bool(only_with_email) if only_with_email is not None else False
+        )
 
         Actor.log.info(
             f"Collecting leads query={query!r} location={location!r} "
-            f"maxItems={max_items} enrichEmail={enrich_email}"
+            f"maxItems={max_items} enrichEmail={enrich_email} "
+            f"onlyWithEmail={only_with_email}"
         )
 
         def log(msg: str) -> None:
@@ -40,6 +45,7 @@ async def main() -> None:
             location=location.strip(),
             max_items=max_items,
             enrich_email=enrich_email,
+            only_with_email=only_with_email,
             log=log,
         )
 

@@ -33,6 +33,13 @@
             "description": "If true, visit each business website/contact page and look for mailto or obvious emails. Slower but higher email rate.",
             "editor": "checkbox",
             "default": true
+        },
+        "onlyWithEmail": {
+            "title": "Only leads with email",
+            "type": "boolean",
+            "description": "If true, only return rows that have a non-empty email. Rows without email are dropped and not charged (no lead-basic for filtered rows). Fetches extra candidates so maxItems still means up to that many email leads.",
+            "editor": "checkbox",
+            "default": false
         }
     },
     "required": ["query", "location"]
