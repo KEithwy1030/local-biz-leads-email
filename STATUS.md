@@ -17,3 +17,9 @@
 
 ## 下一步
 免费 SEO/目录触达；监控陌生付费 run；7 日内无试用则缩垂类。
+
+## 获客触达（2026-10-18 ~11:40 HKT）
+- Store SEO 标题/描述已加强（含 $1.50/1k）
+- Telegraph：https://telegra.ph/Local-business-leads-on-Apify-keyword--city-10-18
+- GitHub：https://github.com/KEithwy1030/local-biz-leads-email
+- 陌生客款仍 $0

@@ -1,0 +1,6 @@
+.venv/
+storage/
+workspace/
+__pycache__/
+*.pyc
+.actor/input.json
