@@ -2,8 +2,8 @@
     "$schema": "https://apify.com/schemas/v1/actor.ide.json",
     "actorSpecification": 1,
     "name": "local-biz-leads-email",
-    "title": "OpenStreetMap Local Business Email Leads (No Maps API)",
-    "description": "OpenStreetMap local business email leads \u2014 no Google Maps API key. Keyword + city \u2192 name, website, phone, email when public. Pay-per-event ~$1.50/1k with email (cheaper than typical OSM peers).",
+    "title": "OSM Local Business Email Leads (OpenStreetMap, No Maps API)",
+    "description": "OSM / OpenStreetMap local business email leads — no Google Maps API key. Keyword + city → name, website, phone, email when public. Pay-per-event ~$1.50/1k with email (cheaper than typical OSM peers).",
     "version": "0.1",
     "buildTag": "latest",
     "meta": {

@@ -10,22 +10,27 @@
             "title": "Industry / keyword",
             "type": "string",
             "description": "What to look for, e.g. plumber, dentist, cafe, lawyer.",
-            "editor": "textfield"
+            "editor": "textfield",
+            "prefill": "dentist",
+            "default": "dentist"
         },
         "location": {
             "title": "City / location",
             "type": "string",
             "description": "City or 'City, Country' / 'City, ST', e.g. Austin, TX or Berlin, Germany.",
-            "editor": "textfield"
+            "editor": "textfield",
+            "prefill": "Austin, TX",
+            "default": "Austin, TX"
         },
         "maxItems": {
             "title": "Max leads",
             "type": "integer",
             "description": "Maximum number of leads to return (1–500).",
             "editor": "number",
-            "default": 50,
+            "default": 5,
             "minimum": 1,
-            "maximum": 500
+            "maximum": 500,
+            "prefill": 5
         },
         "enrichEmail": {
             "title": "Enrich email from website",
@@ -42,5 +47,8 @@
             "default": false
         }
     },
-    "required": ["query", "location"]
+    "required": [
+        "query",
+        "location"
+    ]
 }
