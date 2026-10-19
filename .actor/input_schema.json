@@ -27,7 +27,7 @@
             "type": "integer",
             "description": "Maximum number of leads to return (1–500).",
             "editor": "number",
-            "default": 5,
+            "default": 20,
             "minimum": 1,
             "maximum": 500,
             "prefill": 5
