@@ -335,13 +335,14 @@ def build_overpass_query(
     parts: list[str] = []
     for k, v in tags[:2]:
         parts.append(f'nwr["{k}"="{v}"](around:{radius_m},{lat},{lon});')
-    safe = re.escape(query.strip())
-    if safe:
-        parts.append(f'nwr["name"~"{safe}",i](around:{radius_m},{lat},{lon});')
+    if not tags:
+        safe = re.escape(query.strip())
+        if safe:
+            parts.append(f'nwr["name"~"{safe}",i](around:{min(radius_m, 5000)},{lat},{lon});')
     if not parts:
         parts.append(f'nwr["amenity"](around:{min(radius_m, 3000)},{lat},{lon});')
     body = "\n  ".join(parts)
-    return f"""[out:json][timeout:45];
+    return f"""[out:json][timeout:30];
 (
   {body}
 );
@@ -362,7 +363,7 @@ def run_overpass(
                 url,
                 data={"data": ql},
                 headers={"User-Agent": USER_AGENT},
-                timeout=50.0,
+                timeout=45.0,
             )
             if r.status_code >= 400:
                 last_err = RuntimeError(f"Overpass {url} HTTP {r.status_code}")
