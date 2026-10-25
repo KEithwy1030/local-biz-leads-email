@@ -23,7 +23,17 @@ OVERPASS_URLS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://lz4.overpass-api.de/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 )
+
+NOMINATIM_QUERY_SYNONYMS: dict[str, str] = {
+    "plumber": "plumbing",
+    "electrician": "electrical",
+    "dentist": "dental",
+    "mechanic": "auto repair",
+    "realtor": "real estate",
+}
 
 EMAIL_RE = re.compile(
     r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
@@ -220,20 +230,58 @@ def _name_from_nominatim(item: dict[str, Any]) -> str:
     return dn.split(",", 1)[0].strip()
 
 
-def nominatim_search_leads(
+def _parse_nominatim_item(item: dict[str, Any]) -> dict[str, str] | None:
+    name = _name_from_nominatim(item)
+    if not name:
+        return None
+    # Skip pure place/admin results when they look like the city itself
+    cls = (item.get("class") or "").lower()
+    typ = (item.get("type") or "").lower()
+    if cls in {"boundary", "place"} and typ in {
+        "city",
+        "town",
+        "state",
+        "county",
+        "country",
+        "administrative",
+    }:
+        return None
+    et = item.get("extratags") or {}
+    website = _norm_website(
+        et.get("website") or et.get("contact:website") or et.get("url") or ""
+    )
+    phone = (et.get("phone") or et.get("contact:phone") or "").strip()
+    email = (et.get("email") or et.get("contact:email") or "").strip()
+    osm_type = item.get("osm_type") or "node"
+    osm_id = item.get("osm_id")
+    source_url = (
+        f"https://www.openstreetmap.org/{osm_type}/{osm_id}"
+        if osm_id is not None
+        else ""
+    )
+    email_good = bool(email and _good_email(email))
+    return {
+        "businessName": name,
+        "website": website,
+        "email": email if email_good else "",
+        "phone": phone,
+        "address": _address_from_nominatim(item),
+        "sourceUrl": source_url,
+        "emailSource": "osm_tag" if email_good else "",
+    }
+
+
+def _nominatim_search_single(
     client: httpx.Client,
-    query: str,
-    location: str,
+    search_q: str,
     limit: int,
     log: LogFn = _noop_log,
 ) -> list[dict[str, str]]:
-    """Primary path: Nominatim free-text search with extratags."""
-    q = f"{query} {location}".strip()
-    log(f"Nominatim search q={q!r} limit={limit}")
+    log(f"Nominatim search q={search_q!r} limit={limit}")
     r = client.get(
         NOMINATIM_URL,
         params={
-            "q": q,
+            "q": search_q,
             "format": "json",
             "limit": min(max(limit, 5), 50),
             "extratags": 1,
@@ -247,59 +295,57 @@ def nominatim_search_leads(
     rows: list[dict[str, str]] = []
     seen: set[str] = set()
     for item in data:
-        name = _name_from_nominatim(item)
-        if not name:
+        row = _parse_nominatim_item(item)
+        if not row:
             continue
-        key = name.lower()
+        key = row["businessName"].lower()
         if key in seen:
             continue
-        # Skip pure place/admin results when they look like the city itself
-        cls = (item.get("class") or "").lower()
-        typ = (item.get("type") or "").lower()
-        if cls in {"boundary", "place"} and typ in {
-            "city",
-            "town",
-            "state",
-            "county",
-            "country",
-            "administrative",
-        }:
-            continue
-        et = item.get("extratags") or {}
-        website = _norm_website(
-            et.get("website") or et.get("contact:website") or et.get("url") or ""
-        )
-        phone = (et.get("phone") or et.get("contact:phone") or "").strip()
-        email = (et.get("email") or et.get("contact:email") or "").strip()
-        email_source = "osm_tag" if email else ""
-        osm_type = item.get("osm_type") or "node"
-        osm_id = item.get("osm_id")
-        source_url = (
-            f"https://www.openstreetmap.org/{osm_type}/{osm_id}"
-            if osm_id is not None
-            else (item.get("osm_id") and "") or ""
-        )
-        if osm_id is not None:
-            source_url = f"https://www.openstreetmap.org/{osm_type}/{osm_id}"
-
         seen.add(key)
-        rows.append(
-            {
-                "businessName": name,
-                "website": website,
-                "email": email if _good_email(email) else (email if email else ""),
-                "phone": phone,
-                "address": _address_from_nominatim(item),
-                "sourceUrl": source_url,
-                "emailSource": email_source if (email and _good_email(email)) else "",
-            }
-        )
-        if email and not _good_email(email):
-            rows[-1]["email"] = ""
-            rows[-1]["emailSource"] = ""
-
-    log(f"Nominatim returned {len(rows)} usable POIs")
+        rows.append(row)
+    log(f"Nominatim returned {len(rows)} usable POIs for {search_q!r}")
     return rows
+
+
+def nominatim_search_leads(
+    client: httpx.Client,
+    query: str,
+    location: str,
+    limit: int,
+    log: LogFn = _noop_log,
+) -> list[dict[str, str]]:
+    """Primary path: Nominatim free-text search with extratags + backup queries on 0 rows."""
+    q = f"{query} {location}".strip()
+    rows = _nominatim_search_single(client, q, limit=limit, log=log)
+    if rows:
+        return rows
+
+    # Nominatim 0 rows: try 1-2 fallback queries while respecting 1 req/s
+    fallbacks: list[str] = []
+    q_norm = query.strip().lower()
+    alt_term = NOMINATIM_QUERY_SYNONYMS.get(q_norm)
+    if not alt_term and q_norm.endswith("er") and len(q_norm) > 3:
+        alt_term = f"{q_norm[:-2]}ing"
+    if alt_term:
+        fb_syn = f"{alt_term} {location}".strip()
+        if fb_syn != q and fb_syn not in fallbacks:
+            fallbacks.append(fb_syn)
+
+    fb_near = f"{query.strip()} near {location}".strip()
+    if fb_near != q and fb_near not in fallbacks:
+        fallbacks.append(fb_near)
+
+    for fb_q in fallbacks[:2]:
+        time.sleep(1.1)  # Nominatim 1 req/s policy
+        log(f"Nominatim 0 usable POIs for {q!r}; trying fallback query {fb_q!r}")
+        try:
+            fb_rows = _nominatim_search_single(client, fb_q, limit=limit, log=log)
+            if fb_rows:
+                return fb_rows
+        except Exception as exc:  # noqa: BLE001
+            log(f"Nominatim fallback {fb_q!r} failed: {exc}")
+
+    return []
 
 
 def geocode_location(
@@ -329,6 +375,7 @@ def build_overpass_query(
     lon: float,
     radius_m: int = 10000,
     limit: int = 40,
+    timeout: int = 25,
 ) -> str:
     """Smaller Overpass query to reduce timeouts."""
     tags = _tags_for_query(query)
@@ -342,7 +389,7 @@ def build_overpass_query(
     if not parts:
         parts.append(f'nwr["amenity"](around:{min(radius_m, 3000)},{lat},{lon});')
     body = "\n  ".join(parts)
-    return f"""[out:json][timeout:30];
+    return f"""[out:json][timeout:{timeout}];
 (
   {body}
 );
@@ -353,29 +400,61 @@ out center tags {max(limit, 15)};
 def run_overpass(
     client: httpx.Client,
     ql: str,
+    fallback_ql: str | None = None,
     log: LogFn = _noop_log,
 ) -> list[dict[str, Any]]:
     last_err: Exception | None = None
-    for url in OVERPASS_URLS:
-        try:
-            log(f"Overpass POST {url}…")
-            r = client.post(
-                url,
-                data={"data": ql},
-                headers={"User-Agent": USER_AGENT},
-                timeout=45.0,
-            )
-            if r.status_code >= 400:
-                last_err = RuntimeError(f"Overpass {url} HTTP {r.status_code}")
-                log(str(last_err))
-                continue
-            elements = (r.json() or {}).get("elements") or []
-            log(f"Overpass returned {len(elements)} elements from {url}")
+
+    def _execute(query_str: str, label: str) -> list[dict[str, Any]] | None:
+        nonlocal last_err
+        for url in OVERPASS_URLS:
+            try:
+                log(f"Overpass ({label}) POST {url}…")
+                r = client.post(
+                    url,
+                    data={"data": query_str},
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=30.0,
+                )
+                if r.status_code >= 400:
+                    last_err = RuntimeError(f"Overpass {url} HTTP {r.status_code}")
+                    log(str(last_err))
+                    time.sleep(1.0)
+                    continue
+                elements = (r.json() or {}).get("elements") or []
+                log(f"Overpass returned {len(elements)} elements from {url}")
+                return elements
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                log(f"Overpass {url} failed: {exc}")
+                time.sleep(1.0)
+        return None
+
+    elements = _execute(ql, "round 1")
+    if elements is not None:
+        return elements
+
+    # Round 2: retry with fallback QL (smaller timeout / radius)
+    sec_ql = fallback_ql
+    if not sec_ql:
+        sec_ql = re.sub(
+            r"around:(\d+)",
+            lambda m: f"around:{max(1000, int(m.group(1)) // 2)}",
+            ql,
+        )
+        sec_ql = re.sub(
+            r"timeout:(\d+)",
+            lambda m: f"timeout:{max(10, int(m.group(1)) // 2)}",
+            sec_ql,
+        )
+
+    if sec_ql and sec_ql != ql:
+        log(f"Overpass round 1 all mirrors failed ({last_err}); retrying round 2 with fallback QL…")
+        time.sleep(1.0)
+        elements = _execute(sec_ql, "round 2 fallback")
+        if elements is not None:
             return elements
-        except Exception as exc:  # noqa: BLE001
-            last_err = exc
-            log(f"Overpass {url} failed: {exc}")
-            time.sleep(0.5)
+
     log(f"Overpass all failed ({last_err}); continuing with Nominatim-only rows")
     return []
 
@@ -475,16 +554,19 @@ def collect_leads(
         )
         time.sleep(1.1)  # Nominatim 1 req/s policy
 
-        need_more = sum(1 for r in rows if r.get("website")) < min(fetch_limit, 3)
+        need_more = (len(rows) == 0) or (sum(1 for r in rows if r.get("website")) < min(fetch_limit, 3))
         if need_more:
-            # Optional Overpass fill — never fail the run if it errors
+            # Overpass fill — never fail the run if it errors
             try:
                 lat, lon = geocode_location(client, location, log=log)
                 time.sleep(1.1)
                 ql = build_overpass_query(
-                    query, lat, lon, radius_m=10000, limit=max(fetch_limit * 2, 20)
+                    query, lat, lon, radius_m=10000, limit=max(fetch_limit * 2, 20), timeout=25
                 )
-                elements = run_overpass(client, ql, log=log)
+                fallback_ql = build_overpass_query(
+                    query, lat, lon, radius_m=5000, limit=max(fetch_limit * 2, 20), timeout=15
+                )
+                elements = run_overpass(client, ql, fallback_ql=fallback_ql, log=log)
                 over_rows = []
                 for el in elements:
                     row = _element_to_row(el)
