@@ -41,6 +41,28 @@ Earlier smoke without website enrichment (`PiQQcfDTVtYENJPxn`, same city/niche, 
 
 **Coverage varies by city and OSM tagging.** Dense, well-tagged cities work better. Empty or low fill-rate on a niche/city is possible — try a broader query or another city.
 
+## Second measured demo — Denver plumber (build 0.1.10)
+
+| Field | Value |
+|-------|--------|
+| **Build** | **0.1.10** |
+| **Run id** | `XEyfqQaOKlMDGtc2h` (SUCCEEDED) |
+| **Input** | `query=plumber`, `location=Denver, CO`, `maxItems=10`, `enrichEmail=true` |
+| **Leads returned** | **9** |
+| **With email** | **2 / 9** |
+| **Public proof Gist** | https://gist.github.com/KEithwy1030/c27c0a4802e3d675b9fba5fe72f48da7 |
+
+Nominatim free-text `plumber` alone can return 0 usable POIs in some cities; **0.1.10** adds plumbing-trade synonym fallback + Overpass multi-mirror retries so this niche recovers.
+
+## Public proof links (no Maps API)
+
+| Proof | Link |
+|-------|------|
+| Concept / OSM case | https://gist.github.com/KEithwy1030/0979d9a3386c31b87cba502621950a91 |
+| Austin dentist fill-rate | https://gist.github.com/KEithwy1030/0672e6daafba6b7de5d6f22f6fbceb0c |
+| Denver plumber 0.1.10 | https://gist.github.com/KEithwy1030/c27c0a4802e3d675b9fba5fe72f48da7 |
+| **Apify Store** | https://apify.com/keiwy/local-biz-leads-email |
+
 ## Who it’s for
 
 - Agencies / freelancers building **local outreach lists** without a Maps API bill
