@@ -122,10 +122,11 @@ Failed / empty runs should not charge for leads. Self-tests on your own account 
 
 No LinkedIn, no paid enrichment APIs, no purchased proxies in this Actor. No MX “verified inbox” claim — emails are **publicly listed** strings only.
 
-## Limitations
+## Limitations / Known limits
 
 - OSM coverage ≠ Google Maps coverage
 - Overpass public endpoints can time out; retry or lower `maxItems`
+- **Known limit:** when every public Overpass mirror is overloaded (502/timeouts), a run can still return **0 leads** and charges **$0** for result events — retry later (build **0.1.11** adds more mirrors, backoff, and a short-lived Overpass response cache)
 - Email fill-rate depends on public tags + site crawl; not guaranteed
 - Not a replacement for Maps scrapers when you need ratings, hours from Maps, or place IDs
 

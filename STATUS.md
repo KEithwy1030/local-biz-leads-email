@@ -1,10 +1,11 @@
 # local-biz-leads-email STATUS
-更新：2026-10-19 19:12 HKT
+更新：2026-11-03
 
 ## 当前进度
 | 项 | 状态 |
 |----|------|
-| build | **0.1.7** SUCCEEDED (`JuXqTJDD6CJivMvcY`) |
+| build | **0.1.11** (Overpass mirrors + backoff + KV cache; empty run $0) |
+| prev build | **0.1.7** SUCCEEDED (`JuXqTJDD6CJivMvcY`) |
 | Store | https://apify.com/keiwy/local-biz-leads-email |
 | prefill | ✅ query=dentist / location=Austin, TX / maxItems=5（防 UNDER_MAINTENANCE）|
 | onlyWithEmail | ✅ input + 过滤 + README；云测 run `8qXFOz9KZMxGziYhH` 6/6 有 email |
