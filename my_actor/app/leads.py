@@ -6,18 +6,21 @@ Free public data — no paid APIs, proxies, or LinkedIn cookies.
 
 from __future__ import annotations
 
+import hashlib
+import random
 import re
 import time
-from typing import Any, Callable
-from urllib.parse import urljoin
+from typing import Any, Callable, Protocol
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
 
 USER_AGENT = (
-    "keiwy-local-biz-leads-email/0.1 "
+    "keiwy-local-biz-leads-email/0.1.11 "
     "(Apify Actor; research; contact: via Apify Store listing)"
 )
+ACTOR_BUILD = "0.1.11"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URLS = (
     "https://overpass-api.de/api/interpreter",
@@ -25,6 +28,20 @@ OVERPASS_URLS = (
     "https://lz4.overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
+    "https://z.overpass-api.de/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
+    "https://overpass.nchc.org.tw/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.osm.jp/api/interpreter",
+)
+OVERPASS_CACHE_STORE = "local-biz-overpass-cache"
+OVERPASS_CACHE_TTL_SECS = 7 * 24 * 3600
+OVERPASS_MAX_ROUNDS = 4
+OVERPASS_BACKOFF_SECS = (2.0, 8.0, 20.0, 45.0)
+OVERPASS_SKIP_AFTER = 2  # consecutive 502/403 before skipping a mirror for the run
+OVERPASS_OUTPUT_RESERVE_SECS = 45.0  # leave time to write dataset / finish run
+OVERPASS_UPSTREAM_DOWN_MSG = (
+    "OpenStreetMap Overpass is overloaded; nothing was charged, retry later"
 )
 
 NOMINATIM_QUERY_SYNONYMS: dict[str, str] = {
@@ -93,6 +110,121 @@ LogFn = Callable[[str], None]
 
 def _noop_log(msg: str) -> None:
     pass
+
+
+class OverpassCache(Protocol):
+    """Sync cache for Overpass element lists (Apify named KV or in-memory)."""
+
+    def get(self, key: str) -> dict[str, Any] | None: ...
+
+    def set(self, key: str, value: dict[str, Any]) -> None: ...
+
+
+class MemoryOverpassCache:
+    """In-memory Overpass cache for tests / local runs."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, dict[str, Any]] = {}
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        return self._data.get(key)
+
+    def set(self, key: str, value: dict[str, Any]) -> None:
+        self._data[key] = value
+
+
+def overpass_cache_key(
+    query: str,
+    lat: float,
+    lon: float,
+    radius_m: int,
+) -> str:
+    """Stable key: hash(normalized query, rounded lat/lon, radius)."""
+    norm_q = " ".join((query or "").strip().lower().split())
+    raw = f"{norm_q}|{round(lat, 3)}|{round(lon, 3)}|{int(radius_m)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
+
+
+def _cache_get_elements(
+    cache: OverpassCache | None,
+    key: str,
+    *,
+    allow_stale: bool,
+    log: LogFn = _noop_log,
+) -> list[dict[str, Any]] | None:
+    if cache is None:
+        return None
+    try:
+        entry = cache.get(key)
+        if not entry or not isinstance(entry, dict):
+            return None
+        elements = entry.get("elements")
+        if not isinstance(elements, list):
+            return None
+        ts = float(entry.get("ts") or 0)
+        age = time.time() - ts if ts else float("inf")
+        fresh = age <= OVERPASS_CACHE_TTL_SECS
+        if fresh or allow_stale:
+            kind = "fresh" if fresh else "stale"
+            log(f"Overpass cache hit ({kind}, age={int(age)}s) key={key[:12]}…")
+            return elements
+        log(f"Overpass cache entry expired (age={int(age)}s); ignoring")
+        return None
+    except Exception as exc:  # noqa: BLE001
+        log(f"Overpass cache get skipped: {exc}")
+        return None
+
+
+def _cache_put_elements(
+    cache: OverpassCache | None,
+    key: str,
+    elements: list[dict[str, Any]],
+    log: LogFn = _noop_log,
+) -> None:
+    if cache is None:
+        return
+    try:
+        cache.set(key, {"ts": time.time(), "elements": elements, "v": ACTOR_BUILD})
+        log(f"Overpass cache wrote {len(elements)} elements key={key[:12]}…")
+    except Exception as exc:  # noqa: BLE001
+        log(f"Overpass cache set skipped: {exc}")
+
+
+def _status_url(interpreter_url: str) -> str:
+    """Derive /api/status (or …/status) from an interpreter URL."""
+    if interpreter_url.rstrip("/").endswith("/interpreter"):
+        return interpreter_url.rstrip("/").removesuffix("/interpreter") + "/status"
+    parsed = urlparse(interpreter_url)
+    path = parsed.path.rsplit("/", 1)[0] + "/status"
+    return urlunparse(parsed._replace(path=path, query="", fragment=""))
+
+
+def _parse_slots_available(status_text: str) -> int | None:
+    m = re.search(r"(\d+)\s+slots?\s+available", status_text or "", re.I)
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw.strip()))
+    except ValueError:
+        return None
+
+
+def _backoff_with_jitter(base: float) -> float:
+    # Full jitter in [0.5, 1.25] × base
+    return max(0.0, base * random.uniform(0.5, 1.25))
+
+
+def _deadline_exceeded(deadline: float | None, reserve: float = OVERPASS_OUTPUT_RESERVE_SECS) -> bool:
+    if deadline is None:
+        return False
+    return time.monotonic() >= (deadline - reserve)
 
 
 def _norm_website(raw: str | None) -> str:
@@ -397,17 +529,94 @@ out center tags {max(limit, 15)};
 """
 
 
+def _shrink_overpass_ql(ql: str) -> str:
+    sec = re.sub(
+        r"around:(\d+)",
+        lambda m: f"around:{max(1000, int(m.group(1)) // 2)}",
+        ql,
+    )
+    return re.sub(
+        r"timeout:(\d+)",
+        lambda m: f"timeout:{max(10, int(m.group(1)) // 2)}",
+        sec,
+    )
+
+
 def run_overpass(
     client: httpx.Client,
     ql: str,
     fallback_ql: str | None = None,
     log: LogFn = _noop_log,
+    *,
+    cache: OverpassCache | None = None,
+    cache_key: str | None = None,
+    deadline_monotonic: float | None = None,
+    urls: tuple[str, ...] | list[str] | None = None,
+    max_rounds: int = OVERPASS_MAX_ROUNDS,
+    backoff_secs: tuple[float, ...] = OVERPASS_BACKOFF_SECS,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    meta: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    last_err: Exception | None = None
+    """Query Overpass with mirror rotation, multi-round backoff, and optional cache.
 
-    def _execute(query_str: str, label: str) -> list[dict[str, Any]] | None:
+    On total upstream failure, returns a stale cache entry when available (else []).
+    Never raises for mirror/HTTP failures.
+    """
+    last_err: Exception | None = None
+    mirror_hard_fails: dict[str, int] = {}
+    skipped: set[str] = set()
+    status_probed: set[str] = set()
+    mirrors = list(urls if urls is not None else OVERPASS_URLS)
+    random.shuffle(mirrors)
+    log(f"Overpass mirror order (shuffled): {', '.join(mirrors)}")
+
+    sec_ql = fallback_ql or _shrink_overpass_ql(ql)
+
+    def _maybe_wait_for_slot(url: str, round_idx: int) -> None:
+        # Cheap hint only: one probe per mirror per round, short timeout, tiny wait
+        probe_key = f"{round_idx}:{url}"
+        if probe_key in status_probed or _deadline_exceeded(deadline_monotonic):
+            return
+        status_probed.add(probe_key)
+        try:
+            status_url = _status_url(url)
+            r = client.get(
+                status_url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=3.0,
+            )
+            if r.status_code >= 400:
+                return
+            slots = _parse_slots_available(r.text)
+            if slots is None:
+                return
+            if slots <= 0:
+                wait = min(_backoff_with_jitter(2.0), 3.0)
+                log(f"Overpass status {status_url}: 0 slots; brief wait {wait:.1f}s")
+                sleep_fn(wait)
+        except Exception:  # noqa: BLE001
+            return
+
+    def _mark_hard_fail(url: str, code: int) -> None:
+        if code not in {403, 502}:
+            return
+        mirror_hard_fails[url] = mirror_hard_fails.get(url, 0) + 1
+        if mirror_hard_fails[url] >= OVERPASS_SKIP_AFTER:
+            skipped.add(url)
+            log(
+                f"Overpass skipping {url} for rest of run "
+                f"after {mirror_hard_fails[url]}× HTTP {code}"
+            )
+
+    def _execute(query_str: str, label: str, round_idx: int) -> list[dict[str, Any]] | None:
         nonlocal last_err
-        for url in OVERPASS_URLS:
+        for url in mirrors:
+            if url in skipped:
+                continue
+            if _deadline_exceeded(deadline_monotonic):
+                log("Overpass stopping early to respect Actor timeout / write output")
+                return None
+            _maybe_wait_for_slot(url, round_idx)
             try:
                 log(f"Overpass ({label}) POST {url}…")
                 r = client.post(
@@ -419,7 +628,14 @@ def run_overpass(
                 if r.status_code >= 400:
                     last_err = RuntimeError(f"Overpass {url} HTTP {r.status_code}")
                     log(str(last_err))
-                    time.sleep(1.0)
+                    _mark_hard_fail(url, r.status_code)
+                    retry_after = _retry_after_seconds(r)
+                    if retry_after is not None:
+                        wait = min(retry_after, 30.0)
+                        log(f"Honoring Retry-After={wait:.1f}s from {url}")
+                        sleep_fn(wait)
+                    else:
+                        sleep_fn(1.0)
                     continue
                 elements = (r.json() or {}).get("elements") or []
                 log(f"Overpass returned {len(elements)} elements from {url}")
@@ -427,35 +643,59 @@ def run_overpass(
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 log(f"Overpass {url} failed: {exc}")
-                time.sleep(1.0)
+                sleep_fn(1.0)
         return None
 
-    elements = _execute(ql, "round 1")
-    if elements is not None:
-        return elements
-
-    # Round 2: retry with fallback QL (smaller timeout / radius)
-    sec_ql = fallback_ql
-    if not sec_ql:
-        sec_ql = re.sub(
-            r"around:(\d+)",
-            lambda m: f"around:{max(1000, int(m.group(1)) // 2)}",
-            ql,
+    for round_idx in range(max(1, int(max_rounds))):
+        if _deadline_exceeded(deadline_monotonic):
+            log("Overpass stopping early to respect Actor timeout / write output")
+            break
+        use_fallback = round_idx >= 1 and bool(sec_ql)
+        query_str = sec_ql if use_fallback else ql
+        label = (
+            f"round {round_idx + 1} fallback"
+            if use_fallback and query_str != ql
+            else f"round {round_idx + 1}"
         )
-        sec_ql = re.sub(
-            r"timeout:(\d+)",
-            lambda m: f"timeout:{max(10, int(m.group(1)) // 2)}",
-            sec_ql,
-        )
-
-    if sec_ql and sec_ql != ql:
-        log(f"Overpass round 1 all mirrors failed ({last_err}); retrying round 2 with fallback QL…")
-        time.sleep(1.0)
-        elements = _execute(sec_ql, "round 2 fallback")
+        elements = _execute(query_str, label, round_idx)
         if elements is not None:
+            if cache_key:
+                _cache_put_elements(cache, cache_key, elements, log=log)
+            if meta is not None:
+                meta["overpass_exhausted"] = False
+                meta["used_stale_cache"] = False
             return elements
 
+        if round_idx + 1 >= max_rounds:
+            break
+        base = backoff_secs[min(round_idx, len(backoff_secs) - 1)]
+        wait = _backoff_with_jitter(base)
+        if deadline_monotonic is not None:
+            remaining = deadline_monotonic - OVERPASS_OUTPUT_RESERVE_SECS - time.monotonic()
+            if remaining <= 0:
+                log("Overpass no time left for backoff; stopping")
+                break
+            wait = min(wait, remaining)
+        log(
+            f"Overpass {label} all mirrors failed ({last_err}); "
+            f"backoff {wait:.1f}s before next round…"
+        )
+        sleep_fn(wait)
+
+    # Live Overpass failed — serve stale cache if any
+    if cache_key:
+        stale = _cache_get_elements(cache, cache_key, allow_stale=True, log=log)
+        if stale is not None:
+            log("Serving stale Overpass cache after upstream failure")
+            if meta is not None:
+                meta["used_stale_cache"] = True
+                meta["overpass_exhausted"] = False
+            return stale
+
     log(f"Overpass all failed ({last_err}); continuing with Nominatim-only rows")
+    if meta is not None:
+        meta["overpass_exhausted"] = True
+        meta["used_stale_cache"] = False
     return []
 
 
@@ -536,6 +776,10 @@ def collect_leads(
     enrich_email: bool = True,
     only_with_email: bool = False,
     log: LogFn = _noop_log,
+    *,
+    cache: OverpassCache | None = None,
+    deadline_monotonic: float | None = None,
+    meta: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     query = (query or "").strip()
     location = (location or "").strip()
@@ -548,6 +792,12 @@ def collect_leads(
     if only_with_email:
         fetch_limit = min(max(max_items * 3, max_items + 10), 500)
 
+    if meta is not None:
+        meta.setdefault("overpass_attempted", False)
+        meta.setdefault("overpass_exhausted", False)
+        meta.setdefault("used_stale_cache", False)
+        meta["build"] = ACTOR_BUILD
+
     with httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
         rows = nominatim_search_leads(
             client, query, location, limit=max(fetch_limit, 10), log=log
@@ -558,15 +808,45 @@ def collect_leads(
         if need_more:
             # Overpass fill — never fail the run if it errors
             try:
+                if meta is not None:
+                    meta["overpass_attempted"] = True
                 lat, lon = geocode_location(client, location, log=log)
                 time.sleep(1.1)
-                ql = build_overpass_query(
-                    query, lat, lon, radius_m=10000, limit=max(fetch_limit * 2, 20), timeout=25
+                radius_m = 10000
+                ckey = overpass_cache_key(query, lat, lon, radius_m)
+                # Prefer a fresh cache hit before hitting mirrors
+                cached = _cache_get_elements(
+                    cache, ckey, allow_stale=False, log=log
                 )
-                fallback_ql = build_overpass_query(
-                    query, lat, lon, radius_m=5000, limit=max(fetch_limit * 2, 20), timeout=15
-                )
-                elements = run_overpass(client, ql, fallback_ql=fallback_ql, log=log)
+                if cached is not None:
+                    elements = cached
+                else:
+                    ql = build_overpass_query(
+                        query,
+                        lat,
+                        lon,
+                        radius_m=radius_m,
+                        limit=max(fetch_limit * 2, 20),
+                        timeout=25,
+                    )
+                    fallback_ql = build_overpass_query(
+                        query,
+                        lat,
+                        lon,
+                        radius_m=5000,
+                        limit=max(fetch_limit * 2, 20),
+                        timeout=15,
+                    )
+                    elements = run_overpass(
+                        client,
+                        ql,
+                        fallback_ql=fallback_ql,
+                        log=log,
+                        cache=cache,
+                        cache_key=ckey,
+                        deadline_monotonic=deadline_monotonic,
+                        meta=meta,
+                    )
                 over_rows = []
                 for el in elements:
                     row = _element_to_row(el)
@@ -575,6 +855,8 @@ def collect_leads(
                 rows = _merge_rows(rows, over_rows)
             except Exception as exc:  # noqa: BLE001
                 log(f"Overpass/geocode skipped: {exc}")
+                if meta is not None:
+                    meta["overpass_exhausted"] = True
         else:
             log("Nominatim already has enough website rows; skip Overpass")
 
@@ -618,8 +900,19 @@ def collect_leads(
             f"(with_website={sum(1 for r in ordered if r['website'])}, "
             f"with_email={sum(1 for r in ordered if r['email'])})"
         )
+        if (
+            meta is not None
+            and meta.get("overpass_exhausted")
+            and len(ordered) == 0
+        ):
+            log(OVERPASS_UPSTREAM_DOWN_MSG)
         return ordered
 
 
 def event_name_for_row(row: dict[str, str]) -> str:
     return "lead-with-email" if row.get("email") else "lead-basic"
+
+
+def charge_events_for_rows(rows: list[dict[str, str]]) -> list[str]:
+    """PPE events to charge for pushed rows. Empty input → no events ($0)."""
+    return [event_name_for_row(r) for r in rows]
